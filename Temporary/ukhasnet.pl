@@ -59,6 +59,7 @@ while ($loop){
 		my $addPacket=$dbh->prepare("insert into packet (origin, sequence, checksum) values (?, ?, ?)");
 		my $addPacketRX=$dbh->prepare("insert into packet_rx (packetid, gateway, packet_rx_time) values (?, ?, from_unixtime(?))");
 		my $addRawPacket=$dbh->prepare("insert into raw_packet (packet_rx_id, data) values (?, ?)");
+		my $addPath=$dbh->prepare("insert into path (packet_rx_id, position, node) values (?, ?, ?)");
 
 		my $data=get($Options{'data_url'});
 
@@ -122,10 +123,14 @@ while ($loop){
 					$addPacketRX->execute($PacketID, $gw, $time);	## TODO Need to convert time
 					my $rxID=$addPacketRX->{mysql_insertid};
 					$addRawPacket->execute($rxID,$packet);
-					# Path
+
+					my $hop=0;
+					foreach (split(',', $path)){
+						$addPath->execute($rxID, $hop++, $_);
+					}
 				}
 
-				#last if ($inline >=5);
+				last if ($inline >=5);
 			} elsif (/^(.*)?[rt]x: $/) { 			# jcoxon Dump format
 				# Surpress blank lines
 			} elsif (/^(.*)?Stop$/) {			# jcoxon Dump format
