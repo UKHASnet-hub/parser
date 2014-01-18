@@ -1,7 +1,5 @@
 #!/usr/bin/perl -w
 use strict;
-use LWP::Simple;
-#use POSIX;
 use Time::Local;
 use Digest::CRC qw(crcccitt);
 use DBI();
@@ -9,14 +7,15 @@ use POSIX qw(setsid);
 use Sys::Syslog qw(:DEFAULT setlogsock);
 
 my %Options=(
-  db_host     =>"db1.private.yapd.net",
-  db_database =>"ukhasnet",
-  db_user     =>"ukhasnet",
-  db_pass     =>"",
-  data_url    =>"http://jcoxon.no-ip.org/data.txt",
+  db_host     =>"philcrump.co.uk",
+  db_database =>"postgres",
+  db_user     =>"mike",
+  db_pass     =>"****",
+  db_type     =>"pg",
   sleep_time  =>3,
   lock_file   =>$ENV{"HOME"} . "/run/ukhasnet.pid"
 );
+
 
 if  ( -f $Options{'lock_file'}){
         print "A process is already running\n";
@@ -35,108 +34,81 @@ my $entries=0;
 setlogsock('unix');
 openlog('ukhasnet', 'cons,pid', 'local1');
 
-#$SIG{HUP}= \&catch_hup;
-#$SIG{INT}= \&catch_hup;
+$SIG{HUP}= \&catch_hup;
+$SIG{INT}= \&catch_hup;
 
 syslog('info', 'Starting');
 while ($loop){
         $entries=0;     # Reset Counter
-        my $dbh = DBI->connect("DBI:mysql:host=$Options{'db_host'};database=$Options{'db_database'}", $Options{'db_user'},$Options{'db_pass'});
+	print "Connecting to DB...";
+	my $dbh = DBI->connect("DBI:Pg:host=$Options{'db_host'};database=$Options{'db_database'}", $Options{'db_user'},$Options{'db_pass'});
+	$dbh->do("SET search_path TO ukhasnet, public") if ($Options{'db_type'} eq "pg");
+	print "Connected\n";
 
         # Check we're connected to the DB
         if ($dbh){
                 # Prep SQL Statements
-		#my $findPacket=$dbh->prepare("select distinct packet.id as packetid from packet left join packet_rx on packet.id=packet_rx.packetid where origin=? and sequence=? and checksum = ?");
-			# TODO Add time check
-			# time between min - 15s and max +15s
-			my $findPacket=$dbh->prepare("
-				select packet.id as packetid from packet where 
-				origin= ? and sequence= ? and checksum = ? and from_unixtime(?)
-				between 
-					date_sub((select min(packet_rx_time) from packet_rx where packetid=packet.id), interval 1 minute)
-				and
-					date_add((select max(packet_rx_time) from packet_rx where packetid=packet.id), interval 1 minute)");
+		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' limit 10");
+		my $findPacket=$dbh->prepare("
+			select packet.id as packetid from packet where
+			origin=? and sequence=? and checksum=? and to_timestamp(?)
+			between
+				(select min(packet_rx_time) from packet_rx where packetid=packet.id) - interval '1' minute
+			and
+				(select max(packet_rx_time) from packet_rx where packetid=packet.id) + interval '1' minute");
 		my $addPacket=$dbh->prepare("insert into packet (origin, sequence, checksum) values (?, ?, ?)");
-		my $addPacketRX=$dbh->prepare("insert into packet_rx (packetid, gateway, packet_rx_time) values (?, ?, from_unixtime(?))");
-		my $addRawPacket=$dbh->prepare("insert into raw_packet (packet_rx_id, data) values (?, ?)");
+		my $addPacketRX=$dbh->prepare("insert into packet_rx (packetid, gatewayid, packet_rx_time, uploadid) values (?, ?, to_timestamp(?), ?)");
 		my $addPath=$dbh->prepare("insert into path (packet_rx_id, position, node) values (?, ?, ?)");
+		my $uploadUpdate=$dbh->prepare("update upload set packetid=?, state='Processed' where id=?");
+		my $uploadFailed=$dbh->prepare("update upload set state='Error' where id=?");
 
-		my $data=get($Options{'data_url'});
+		$getData->execute();
+		while (my $record=$getData->fetchrow_hashref){
+			$entries++;
+			print ">".$record->{'packet'}."\t(".$record->{'id'}.")\t".$record->{'time'}."\n";
+			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)\[([A-Za-z,]+)\]$/){
+				#my $repeat=$1;
+				my $seq=$2;
+				my $data=$3;
+				my $path=$4;
 
-		# TODO Need to skip lines we've already processed
-		# select max(time) from packet_rx where gw=JC
-
-		my $inline=0;
-		foreach (split('\n',$data)){
-			my $packet=$_;
-			$inline++;
-
-			if (/^(.*)?[rt]x: ([0-9])([a-z])([A-Z0-9\.,\-]+)\[([A-Z,]+)\]/){			# jcoxon Dump format
-				my $time=0;
-				if (defined($1)){
-					if ($1 =~ /^([0-9]+):-/){						# Time in Unixtime
-						$time=$1;
-					} elsif ($1 =~ /^([0-9]+-[0-9]+-[0-9]+) ([0-9]+:[0-9]+:[0-9]+):-/){	# Time in YYYY-MM-DD HH:MM:SS
-						my ($y,$m,$d) = split('-',$1);
-						my ($h,$min,$s) = split(':',$2);
-						$time=timegm($s, $min, $h, $d, $m-1, $y);
-					} else {								# No Time set
-						$time = 1389396784 if ($inline <= 20 );
-					}
-				}
-				my $repeat=$2;
-				my $seq=$3;
-				my $data=$4;
-				my $path=$5;
-				my $gw="JC";
 				my ($origin,$therest) = split(',', $path);
-
 				my $csum=crcccitt($seq . $data . $origin);
 
-				print "1> $_\n";
-				print "\t$time\t$2\t$3\t$4($csum)\t$5\n";
+				print "->".$record->{'packet'}."\t(".$record->{'time'}.")\t$seq\t$data\t$origin($csum)\t$path\n";
 
-				
-				# TODO Check if we have a recently matching packet
+				# TODO Add in Transactions ?
+
 				my $PacketID=0;
-				#$findPacket->execute($origin, $seq, $csum);
-				$findPacket->execute($origin, $seq, $csum, $time);
+				$findPacket->execute($origin, $seq, $csum, $record->{'time'});
 				if ($findPacket->rows()==1){				# Single Match - GOOD
 					my $row=$findPacket->fetchrow_hashref;
 					$PacketID=$row->{'packetid'};
-
-
-					# TODO Process packet data
-
-					# Packet Data
 				} elsif ($findPacket->rows()>1){			# Multiple Matches - Bad
-					print "Error: Input line $packet matches more than one packet in DB\n";
+					print "Error: Input line ".$record->{'packet'}." matches more than one packet in DB\n";
 					while (my $row=$findPacket->fetchrow_hashref){
 						print "-->Potential ID " . $row->{'packetid'} . "\n";
 					}
 				} else {
 					$addPacket->execute($origin,$seq,$csum);
-					$PacketID=$addPacket->{mysql_insertid};
+					$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
+
+					# TODO Process packet data
 				}
 
 				if ($PacketID > 0){
-					$addPacketRX->execute($PacketID, $gw, $time);	## TODO Need to convert time
-					my $rxID=$addPacketRX->{mysql_insertid};
-					$addRawPacket->execute($rxID,$packet);
+					$addPacketRX->execute($PacketID, $record->{'nodeid'}, $record->{'time'},$record->{'id'});
+					my $rxID=$dbh->last_insert_id(undef, "ukhasnet", "packet_rx", undef);
+					$uploadUpdate->execute($PacketID,$record->{'id'});
 
 					my $hop=0;
 					foreach (split(',', $path)){
 						$addPath->execute($rxID, $hop++, $_);
 					}
 				}
-
-				last if ($inline >=5);
-			} elsif (/^(.*)?[rt]x: $/) { 			# jcoxon Dump format
-				# Surpress blank lines
-			} elsif (/^(.*)?Stop$/) {			# jcoxon Dump format
-				# Surpress blank lines
 			} else {
-				print "?> $_\n";
+				print "?> ".$record->{'packet'}."(".$record->{'id'}.")\n";
+				$uploadFailed->execute($record->{'id'});
 			}
 
 			# If previous sequence from this node was A ignore any other sequenct
@@ -148,19 +120,23 @@ while ($loop){
 
 
 		# Close SQL Connections
+		$getData->finish();
 		$findPacket->finish();
 		$addPacket->finish();
 		$addPacketRX->finish();
-		$addRawPacket->finish();
+		$addPath->finish();
+		$uploadUpdate->finish();
+		$uploadFailed->finish();
                 $dbh->disconnect();
-		$loop=0;
 		print "Done\n";
-		#sleep (10);
+		sleep (60) if ($loop && ($entries==0));
+		sleep (10) if $loop;
         } else { #if ($dbh)
+		print "DB connection failed\n";
                 sleep(60) if $loop;
         }
-
-        sleep($Options{'sleep_time'});
+	print "Loop done";
+        #sleep($Options{'sleep_time'});
 } #while($loop)
 
 unlink $Options{'lock_file'};
