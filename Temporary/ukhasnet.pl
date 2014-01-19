@@ -14,6 +14,7 @@ use Sys::Syslog qw(:DEFAULT setlogsock);
 # How to deal with sequence = a
 #   Should also not link to previous packets (requires us to remember state)
 # Get password from command line
+# Stop storing origin in packet DB (only store originid)
 
 my %Options=(
   db_host     =>"philcrump.co.uk",
@@ -25,18 +26,19 @@ my %Options=(
   lock_file   =>$ENV{"HOME"} . "/run/ukhasnet.pid"
 );
 
-if  ( -f $Options{'lock_file'}){
-        print "A process is already running\n";
-        exit -1;
+if ( -f $Options{'lock_file'}){
+	print "A process is already running\n";
+	exit -1;
 }
-#open (_LOCK, ">".$Options{'lock_file'}) or die "Unable to create lockfile\n";
-#&daemonize;
-#print _LOCK "$$";
-#close _LOCK;
+open (_LOCK, ">".$Options{'lock_file'}) or die "Unable to create lockfile\n";
+&daemonize;
+print _LOCK "$$";
+close _LOCK;
 
 my $lastpos=0;
 my $loop=1;
 my $entries=0;
+my $dbh=0;
 
 # Syslog
 setlogsock('unix');
@@ -47,15 +49,12 @@ $SIG{INT}= \&catch_hup;
 
 syslog('info', 'Starting');
 while ($loop){
-        $entries=0;     # Reset Counter
-	print "Connecting to DB...";
-	my $dbh = DBI->connect("DBI:Pg:host=$Options{'db_host'};database=$Options{'db_database'}", $Options{'db_user'},$Options{'db_pass'});
-	$dbh->do("SET search_path TO ukhasnet, public") if ($Options{'db_type'} eq "pg");
-	print "Connected\n";
-
-        # Check we're connected to the DB
-        if ($dbh){
-                # Prep SQL Statements
+	$entries=0;     # Reset Counter
+	$dbh = DBI->connect("DBI:Pg:host=$Options{'db_host'};database=$Options{'db_database'}", $Options{'db_user'},$Options{'db_pass'});
+	# Check we're connected to the DB
+		if ($dbh){
+		$dbh->do("SET search_path TO ukhasnet, public") if ($Options{'db_type'} eq "pg");
+		# Prep SQL Statements
 		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' limit 50");
 		my $findPacket=$dbh->prepare("
 			select packet.id as packetid from packet where
@@ -70,14 +69,10 @@ while ($loop){
 		my $uploadUpdate=$dbh->prepare("update upload set packetid=?, state='Processed' where id=?");
 		my $uploadFailed=$dbh->prepare("update upload set state='Error' where id=?");
 
-		my $getNode=$dbh->prepare("select id from nodes where name = ?");
-		my $addNode=$dbh->prepare("insert into nodes (name) values (?)");
-
 		$getData->execute();
 		while (my $record=$getData->fetchrow_hashref){
-
+			syslog('info', "Processing Packet \"".$record->{'packet'}."\"(".$record->{'id'}.")");
 			$entries++;
-			print ">".$record->{'packet'}."\t(".$record->{'id'}.")\t".$record->{'time'}."\n";
 			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)\[([A-Za-z,]+)\]\r?$/){
 				$dbh->begin_work();	# Start Transaction
 				my $error=0;
@@ -89,8 +84,6 @@ while ($loop){
 
 				my ($origin,$therest) = split(',', $path);
 				my $csum=crcccitt($seq . $data . $origin);
-
-				print "->".$record->{'packet'}."\t(".$record->{'time'}.")\t$seq\t$data\t$origin($csum)\t$path\n";
 
 				my $PacketID=0;
 				$findPacket->execute($origin, $seq, $csum, $record->{'time'});
@@ -105,29 +98,16 @@ while ($loop){
 					}
 				} else {
 					## Get NodeID for Origin
-					my $nodeID=0;
-					$getNode->execute($origin);
-					if ($getNode->rows()==1){
-						my $nodeRow=$getNode->fetchrow_hashref;
-						$nodeID=$nodeRow->{'id'};
-					} elsif ($getNode->rows()>1){
-						$error=1;
-						print "Error: Input line ".$record->{'packet'}."(".$record->{'id'}.") matches more than one origin node in DB\n";
-						while (my $nodeRow=$getNode->fetchrow_hashref){
-							print "-->Potential ID " . $nodeRow->{'id'} . "\n";
-						}
-					} else {
-						$addNode->execute($origin);
-						$nodeID=$dbh->last_insert_id(undef, "ukhasnet", "nodes", undef);
-						print "--> Adding Node $origin($nodeID)\n";
-					}
-						
+					my $nodeID=&getNodeID($origin);
+
 					if ($nodeID >0){
 						$addPacket->execute($origin,$nodeID,$seq,$csum);
 						$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
 						# TODO Process packet data
+					} else {
+						$error=1;
+						print "Error: Unable to get NodeID\n";
 					}
-
 				}
 
 				if ($PacketID > 0){
@@ -138,6 +118,7 @@ while ($loop){
 					my $hop=0;
 					foreach (split(',', $path)){
 						$addPath->execute($rxID, $hop++, $_);
+						# TODO path should use nodes table
 					}
 				}
 				if ($error == 0){
@@ -164,33 +145,52 @@ while ($loop){
 		$addPath->finish();
 		$uploadUpdate->finish();
 		$uploadFailed->finish();
-		$getNode->finish();
-		$addNode->finish();
 		$dbh->disconnect();
-		print "Done\n";
-		sleep (60) if ($loop && ($entries==0));
-		sleep (10) if $loop;
-        } else { #if ($dbh)
+		sleep (20) if ($loop && ($entries==0));
+	} else { #if ($dbh)
 		print "DB connection failed\n";
-                sleep(60) if $loop;
-        }
-	print "Loop done";
-        #sleep($Options{'sleep_time'});
+		sleep(60) if $loop;
+	}
 } #while($loop)
 
 unlink $Options{'lock_file'};
 
 sub daemonize {
-        chdir '/'                 or die "Can't chdir to /: $!";
-        defined(my $pid = fork)   or die "Can't fork: $!";
-        exit if $pid;
-        setsid                    or die "Can't start a new session: $!";
-        umask 0;
+	chdir '/'                 or die "Can't chdir to /: $!";
+	defined(my $pid = fork)   or die "Can't fork: $!";
+	exit if $pid;
+	setsid                    or die "Can't start a new session: $!";
+	umask 0;
 }
 
 sub catch_hup {
-        $loop=0;
-        syslog('warning', 'Got HUP');
+	$loop=0;
+	syslog('warning', 'Got HUP');
 	print "Got HUP\n";
 }
 
+sub getNodeID {
+	die "Wrong number of args to getNodeID\n" if (scalar(@_) !=1 );
+	my $origin=$_[0];
+	my $nodeID=0;
+
+	my $getNode=$dbh->prepare("select id from nodes where name = ?");
+	my $addNode=$dbh->prepare("insert into nodes (name) values (?)");
+	$getNode->execute($origin);
+	if ($getNode->rows()==1){
+		my $nodeRow=$getNode->fetchrow_hashref;
+		$nodeID=$nodeRow->{'id'};
+	} elsif ($getNode->rows()>1){
+		print "Error: Matched more than one node\n"; #Input line ".$record->{'packet'}."(".$record->{'id'}.") matches more than one origin node in DB\n";
+		while (my $nodeRow=$getNode->fetchrow_hashref){
+			print "-->Potential ID " . $nodeRow->{'id'} . "\n";
+		}
+	} else {
+		$addNode->execute($origin);
+		$nodeID=$dbh->last_insert_id(undef, "ukhasnet", "nodes", undef);
+		print "--> Added Node $origin($nodeID)\n";
+	}
+	#$getNode->finish();
+	#$addNode->finish();
+	return $nodeID;
+}
