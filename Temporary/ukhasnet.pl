@@ -57,15 +57,15 @@ while ($loop){
 		# Prep SQL Statements
 		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' limit 50");
 		my $findPacket=$dbh->prepare("
-			select packet.id as packetid from packet where
-			origin=? and sequence=? and checksum=? and to_timestamp(?)
+			select packet.id as packetid from packet left join nodes on packet.originid=nodes.id where
+			name=? and sequence=? and checksum=? and to_timestamp(?)
 			between
 				(select min(packet_rx_time) from packet_rx where packetid=packet.id) - interval '1' minute
 			and
 				(select max(packet_rx_time) from packet_rx where packetid=packet.id) + interval '1' minute");
-		my $addPacket=$dbh->prepare("insert into packet (origin, originid, sequence, checksum) values (?, ?, ?, ?)");
+		my $addPacket=$dbh->prepare("insert into packet (originid, sequence, checksum) values (?, ?, ?)");
 		my $addPacketRX=$dbh->prepare("insert into packet_rx (packetid, gatewayid, packet_rx_time, uploadid) values (?, ?, to_timestamp(?), ?)");
-		my $addPath=$dbh->prepare("insert into path (packet_rx_id, position, node) values (?, ?, ?)");
+		my $addPath=$dbh->prepare("insert into path (packet_rx_id, position, nodeid) values (?, ?, ?)");
 		my $uploadUpdate=$dbh->prepare("update upload set packetid=?, state='Processed' where id=?");
 		my $uploadFailed=$dbh->prepare("update upload set state='Error' where id=?");
 
@@ -101,12 +101,12 @@ while ($loop){
 					my $nodeID=&getNodeID($origin);
 
 					if ($nodeID >0){
-						$addPacket->execute($origin,$nodeID,$seq,$csum);
+						$addPacket->execute($nodeID,$seq,$csum);
 						$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
 						# TODO Process packet data
 					} else {
 						$error=1;
-						print "Error: Unable to get NodeID\n";
+						print "Error: (addPacket) Unable to get NodeID\n";
 					}
 				}
 
@@ -117,24 +117,27 @@ while ($loop){
 
 					my $hop=0;
 					foreach (split(',', $path)){
-						$addPath->execute($rxID, $hop++, $_);
-						# TODO path should use nodes table
+						my $nodeID=&getNodeID($_);
+						if ($nodeID >0){
+							$addPath->execute($rxID, $hop++, $nodeID);
+						} else {
+							$error=1;
+							print "Error: (addPath) Unable to get NodeID\n";
+						}
 					}
 				}
 				if ($error == 0){
 					$dbh->commit();
 				} else {
 					# Rollback
-					die "DB Transaction failed\n";
 					$dbh->rollback();
 					$uploadFailed->execute($record->{'id'});
+					die "DB Transaction failed\n";
 				}
 			} else {
 				print "?> ".$record->{'packet'}."(".$record->{'id'}.")\n";
 				$uploadFailed->execute($record->{'id'});
 			}
-
-
 		}
 
 		# Close SQL Connections
@@ -166,7 +169,6 @@ sub daemonize {
 sub catch_hup {
 	$loop=0;
 	syslog('warning', 'Got HUP');
-	print "Got HUP\n";
 }
 
 sub getNodeID {
