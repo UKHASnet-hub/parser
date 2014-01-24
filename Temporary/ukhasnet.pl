@@ -55,7 +55,7 @@ while ($loop){
 		if ($dbh){
 		$dbh->do("SET search_path TO ukhasnet, public") if ($Options{'db_type'} eq "pg");
 		# Prep SQL Statements
-		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' limit 50");
+		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' LIMIT 10");
 		my $findPacket=$dbh->prepare("
 			select packet.id as packetid from packet left join nodes on packet.originid=nodes.id where
 			name=? and sequence=? and checksum=? and to_timestamp(?)
@@ -104,6 +104,27 @@ while ($loop){
 						$addPacket->execute($nodeID,$seq,$csum);
 						$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
 						# TODO Process packet data
+						print "-> $data \n";
+						#foreach my $val (split(/([A-Z])/,$data)){
+							#print "-->".$val."\n";
+						#}
+						while ($data){
+							my ($var, $val);
+							($var, $val, $data) = &splitData($data);
+							print "-->$var\t$val\t$data\n";
+						}
+
+
+
+#T19,8R142V768,0
+#T18,8R143V768,0
+#T19,8R33V768,0
+#T14,8R142V769,0
+#T30R139
+#T29R32
+#L50.9,-1.4T225
+
+
 					} else {
 						$error=1;
 						print "Error: (addPacket) Unable to get NodeID\n";
@@ -195,4 +216,18 @@ sub getNodeID {
 	#$getNode->finish();
 	#$addNode->finish();
 	return $nodeID;
+}
+
+sub splitData {
+	die "Wrong number of args to getNodeID\n" if (scalar(@_) !=1 );
+	my $data=$_[0];
+	my ($var,$val,$rest);
+	if ($data =~ /^([A-Z])([0-9\.,]+)(.*)$/ ){
+		$var=$1;
+		$val=$2;
+		$rest=$3;
+	} else {
+		print "Error: No Match for $data\n";
+	}
+	return ($var, $val, $rest);
 }
