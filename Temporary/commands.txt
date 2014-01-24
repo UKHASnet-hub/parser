@@ -1,0 +1,2 @@
+# Convert jconxon txt file into SQL commands (May need minor manual processing after)
+sed "s/\([0-9-]\+ [0-9:]\+\):- [rt]x: \(.\+\)\r$/insert into ukhasnet.upload (nodeid,time,packet) values (1, '\1','\2');/" data.txt  > jcoxon.sql
