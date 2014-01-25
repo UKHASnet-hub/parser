@@ -55,7 +55,7 @@ while ($loop){
 		if ($dbh){
 		$dbh->do("SET search_path TO ukhasnet, public") if ($Options{'db_type'} eq "pg");
 		# Prep SQL Statements
-		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' LIMIT 10");
+		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' LIMIT 20");
 		my $findPacket=$dbh->prepare("
 			select packet.id as packetid from packet left join nodes on packet.originid=nodes.id where
 			name=? and sequence=? and checksum=? and to_timestamp(?)
@@ -68,6 +68,10 @@ while ($loop){
 		my $addPath=$dbh->prepare("insert into path (packet_rx_id, position, nodeid) values (?, ?, ?)");
 		my $uploadUpdate=$dbh->prepare("update upload set packetid=?, state='Processed' where id=?");
 		my $uploadFailed=$dbh->prepare("update upload set state='Error' where id=?");
+
+		my $getField=$dbh->prepare("select id, type from fieldtypes where dataid=?");
+		my $data_float=$dbh->prepare("insert into data_float (packetid, fieldid, data, position) values (?, ?, ?, ?)");
+		my $data_raw=$dbh->prepare("insert into rawdata (packetid, data, state) values (?, ?, 'Error')");
 
 		$getData->execute();
 		while (my $record=$getData->fetchrow_hashref){
@@ -103,28 +107,43 @@ while ($loop){
 					if ($nodeID >0){
 						$addPacket->execute($nodeID,$seq,$csum);
 						$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
+
 						# TODO Process packet data
-						print "-> $data \n";
-						#foreach my $val (split(/([A-Z])/,$data)){
-							#print "-->".$val."\n";
-						#}
+						#print "-> $data \n";
 						while ($data){
 							my ($var, $val);
 							($var, $val, $data) = &splitData($data);
-							print "-->$var\t$val\t$data\n";
+							if ($var =~ /[A-Z]/){
+								#print "-->$var\t$val\t$data\n";
+								$getField->execute($var);
+								if ($getField->rows()==1){
+									my $t=$getField->fetchrow_hashref;
+									my $type=$t->{'type'};
+									if ($type eq "Float"){ 
+										my $p=0;
+										foreach my $v (split(/,/, $val)){
+											$data_float->execute($PacketID, $t->{'id'}, $v, $p++);
+										}
+									} elsif ($type eq "Integer"){
+										print "Error: Cant store $type for ".$var.$val."($PacketID)\n";
+										$data_raw->execute($PacketID, $var.$val);
+									} elsif ($type eq "String"){
+										print "Error: Cant store $type for ".$var.$val."($PacketID)\n";
+										$data_raw->execute($PacketID, $var.$val);
+									} else {
+										print "Error: Unknown type for ".$var.$val."($PacketID)\n";
+										$data_raw->execute($PacketID, $var.$val);
+									}
+								} else {
+									print "Error: Wrong number of rows for ".$var.$val."($PacketID)\n";
+									$data_raw->execute($PacketID, $var.$val);
+								}
+							} else {
+								print "Error: Cannot process $data($PacketID)\n";
+								$data_raw->execute($PacketID, $data);
+								undef($data);
+							}
 						}
-
-
-
-#T19,8R142V768,0
-#T18,8R143V768,0
-#T19,8R33V768,0
-#T14,8R142V769,0
-#T30R139
-#T29R32
-#L50.9,-1.4T225
-
-
 					} else {
 						$error=1;
 						print "Error: (addPacket) Unable to get NodeID\n";
@@ -169,6 +188,9 @@ while ($loop){
 		$addPath->finish();
 		$uploadUpdate->finish();
 		$uploadFailed->finish();
+		$getField->finish();
+		$data_float->finish();
+		$data_raw->finish();
 		$dbh->disconnect();
 		sleep (20) if ($loop && ($entries==0));
 	} else { #if ($dbh)
@@ -178,6 +200,7 @@ while ($loop){
 } #while($loop)
 
 unlink $Options{'lock_file'};
+syslog('info', 'Finished');
 
 sub daemonize {
 	chdir '/'                 or die "Can't chdir to /: $!";
@@ -221,13 +244,10 @@ sub getNodeID {
 sub splitData {
 	die "Wrong number of args to getNodeID\n" if (scalar(@_) !=1 );
 	my $data=$_[0];
-	my ($var,$val,$rest);
-	if ($data =~ /^([A-Z])([0-9\.,]+)(.*)$/ ){
-		$var=$1;
-		$val=$2;
-		$rest=$3;
+	if ($data =~ /^([A-Z])([0-9\.,\-]+)(.*)$/ ){
+		return ($1, $2, $3);
 	} else {
 		print "Error: No Match for $data\n";
+		return (-1,-1,$data);
 	}
-	return ($var, $val, $rest);
 }
