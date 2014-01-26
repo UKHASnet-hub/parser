@@ -4,17 +4,17 @@ use Time::Local;
 use Digest::CRC qw(crcccitt);
 use DBI();
 use POSIX qw(setsid);
-use Sys::Syslog qw(:DEFAULT setlogsock);
+use Sys::Syslog;
 
 # TODO List
+# Check SQL inserts/updates work otherwise log an error message and set $error=1 - or $error=1 on ->execute() ??
+# Move packet data Processing into sub?
+# Get password from command line
 # Test Transactions work (i.e. if a query fails we roll it all back) - How to test?
-# Path table links to nodes rather than storing the path values.
-# Store data from the packets into the DB
-# Log to syslog instead of console
 # How to deal with sequence = a
 #   Should also not link to previous packets (requires us to remember state)
-# Get password from command line
-# Stop storing origin in packet DB (only store originid)
+
+# Load/cache fieldtypes into hashref
 
 my %Options=(
   db_host     =>"philcrump.co.uk",
@@ -41,7 +41,6 @@ my $entries=0;
 my $dbh=0;
 
 # Syslog
-setlogsock('unix');
 openlog('ukhasnet', 'cons,pid', 'local1');
 
 $SIG{HUP}= \&catch_hup;
@@ -53,9 +52,10 @@ while ($loop){
 	$dbh = DBI->connect("DBI:Pg:host=$Options{'db_host'};database=$Options{'db_database'}", $Options{'db_user'},$Options{'db_pass'});
 	# Check we're connected to the DB
 		if ($dbh){
-		$dbh->do("SET search_path TO ukhasnet, public") if ($Options{'db_type'} eq "pg");
+		$dbh->do("SET search_path TO ukhasnet");
+
 		# Prep SQL Statements
-		my $getData=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from ukhasnet.upload where state='Pending' LIMIT 20");
+		my $getUploads=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from upload where state='Pending' LIMIT 20");
 		my $findPacket=$dbh->prepare("
 			select packet.id as packetid from packet left join nodes on packet.originid=nodes.id where
 			name=? and sequence=? and checksum=? and to_timestamp(?)
@@ -69,12 +69,18 @@ while ($loop){
 		my $uploadUpdate=$dbh->prepare("update upload set packetid=?, state='Processed' where id=?");
 		my $uploadFailed=$dbh->prepare("update upload set state='Error' where id=?");
 
+		# Queries for handling data portion of the packet
+		my $getRawData=$dbh->prepare("select id, packetid, data from rawdata where state='Pending' LIMIT 60");
 		my $getField=$dbh->prepare("select id, type from fieldtypes where dataid=?");
 		my $data_float=$dbh->prepare("insert into data_float (packetid, fieldid, data, position) values (?, ?, ?, ?)");
-		my $data_raw=$dbh->prepare("insert into rawdata (packetid, data, state) values (?, ?, 'Error')");
+		# data int
+		# data string
+		my $data_raw=$dbh->prepare("insert into rawdata (packetid, data, state) values (?, ?, ?)");
+		my $dataProcessed=$dbh->prepare('update rawdata set state=$2 where id=$1');
 
-		$getData->execute();
-		while (my $record=$getData->fetchrow_hashref){
+		# Get Pending records from the upload Table
+		$getUploads->execute();
+		while (my $record=$getUploads->fetchrow_hashref){
 			syslog('info', "Processing Packet \"".$record->{'packet'}."\"(".$record->{'id'}.")");
 			$entries++;
 			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)\[([A-Za-z,]+)\]\r?$/){
@@ -89,6 +95,7 @@ while ($loop){
 				my ($origin,$therest) = split(',', $path);
 				my $csum=crcccitt($seq . $data . $origin);
 
+				# See if the packet has already been seen - If not store it.
 				my $PacketID=0;
 				$findPacket->execute($origin, $seq, $csum, $record->{'time'});
 				if ($findPacket->rows()==1){				# Single Match - GOOD
@@ -101,55 +108,21 @@ while ($loop){
 						print "-->Potential ID " . $row->{'packetid'} . "\n";
 					}
 				} else {
-					## Get NodeID for Origin
+					# Get NodeID for Origin
 					my $nodeID=&getNodeID($origin);
 
 					if ($nodeID >0){
 						$addPacket->execute($nodeID,$seq,$csum);
 						$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
-
-						# TODO Process packet data
-						#print "-> $data \n";
-						while ($data){
-							my ($var, $val);
-							($var, $val, $data) = &splitData($data);
-							if ($var =~ /[A-Z]/){
-								#print "-->$var\t$val\t$data\n";
-								$getField->execute($var);
-								if ($getField->rows()==1){
-									my $t=$getField->fetchrow_hashref;
-									my $type=$t->{'type'};
-									if ($type eq "Float"){ 
-										my $p=0;
-										foreach my $v (split(/,/, $val)){
-											$data_float->execute($PacketID, $t->{'id'}, $v, $p++);
-										}
-									} elsif ($type eq "Integer"){
-										print "Error: Cant store $type for ".$var.$val."($PacketID)\n";
-										$data_raw->execute($PacketID, $var.$val);
-									} elsif ($type eq "String"){
-										print "Error: Cant store $type for ".$var.$val."($PacketID)\n";
-										$data_raw->execute($PacketID, $var.$val);
-									} else {
-										print "Error: Unknown type for ".$var.$val."($PacketID)\n";
-										$data_raw->execute($PacketID, $var.$val);
-									}
-								} else {
-									print "Error: Wrong number of rows for ".$var.$val."($PacketID)\n";
-									$data_raw->execute($PacketID, $var.$val);
-								}
-							} else {
-								print "Error: Cannot process $data($PacketID)\n";
-								$data_raw->execute($PacketID, $data);
-								undef($data);
-							}
-						}
+						# Store the Data portion of the packet in rawdata for later processing
+						$data_raw->execute($PacketID, $data, 'Pending');
 					} else {
 						$error=1;
 						print "Error: (addPacket) Unable to get NodeID\n";
 					}
 				}
 
+				# Store details of this reception of the packet
 				if ($PacketID > 0){
 					$addPacketRX->execute($PacketID, $record->{'nodeid'}, $record->{'time'},$record->{'id'});
 					my $rxID=$dbh->last_insert_id(undef, "ukhasnet", "packet_rx", undef);
@@ -162,7 +135,7 @@ while ($loop){
 							$addPath->execute($rxID, $hop++, $nodeID);
 						} else {
 							$error=1;
-							print "Error: (addPath) Unable to get NodeID\n";
+							syslog('error', "Error: (addPath) Unable to get NodeID($PacketID:$rxID)");
 						}
 					}
 				}
@@ -175,13 +148,69 @@ while ($loop){
 					die "DB Transaction failed\n";
 				}
 			} else {
+				# Unknown packet format
 				print "?> ".$record->{'packet'}."(".$record->{'id'}.")\n";
 				$uploadFailed->execute($record->{'id'});
 			}
-		}
+		} #while (my $record=$getUploads->fetchrow_hashref){
+
+
+		# Process the data in rawdata
+		$getRawData->execute();
+		while (my $datarow=$getRawData->fetchrow_hashref){
+			$dbh->begin_work();	# Start Transaction
+			my $error=0;
+
+			my $data=$datarow->{'data'};
+
+			# Process packet data
+			while ($data) {
+				syslog('info', "Processing Data \"$data(".$datarow->{'id'}.")");
+				my ($var, $val);
+				($var, $val, $data) = &splitData($data);
+				if ($var =~ /[A-Z]/){
+					$getField->execute($var);
+					if ($getField->rows()==1){
+						my $type=$getField->fetchrow_hashref;
+						if ($type->{'type'} eq "Float"){ 
+							my $p=0;
+							foreach my $v (split(/,/, $val)){
+								$data_float->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
+							}
+						} elsif ($type->{'type'} eq "Integer"){
+							syslog('error', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
+							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+						} elsif ($type->{'type'} eq "String"){
+							syslog('error', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
+							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+						} else {
+							syslog('error', "Error: Unknown type(".$type->{'type'}.") for ".$var.$val."($datarow->{'packetid'})");
+							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+						}
+					} else {
+						syslog('error', "Error: Wrong number of rows for ".$var.$val."($datarow->{'packetid'})");
+						$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+					}
+				} else {
+					syslog('error', "Error: Cannot process $data($datarow->{'packetid'})");
+					$data_raw->execute($datarow->{'packetid'}, $data, 'Error');
+					undef($data);
+				}
+			} # while($data)
+			$dataProcessed->execute($datarow->{'id'}, 'Processed');
+			if ($error == 0){
+				$dbh->commit();
+			} else {
+				# Rollback
+				$dbh->rollback();
+				$dataProcessed->execute($datarow->{'id'}, 'Error');
+				die "DB Transaction failed\n";
+			}
+		} # while($datarow
+
 
 		# Close SQL Connections
-		$getData->finish();
+		$getUploads->finish();
 		$findPacket->finish();
 		$addPacket->finish();
 		$addPacketRX->finish();
@@ -194,7 +223,7 @@ while ($loop){
 		$dbh->disconnect();
 		sleep (20) if ($loop && ($entries==0));
 	} else { #if ($dbh)
-		print "DB connection failed\n";
+		syslog('error', "Error: Unable to connect to DB");
 		sleep(60) if $loop;
 	}
 } #while($loop)
