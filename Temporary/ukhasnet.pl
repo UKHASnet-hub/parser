@@ -20,7 +20,7 @@ my %Options=(
   db_host     =>"philcrump.co.uk",
   db_database =>"postgres",
   db_user     =>"mike",
-  db_pass     =>"m1ari",
+  db_pass     =>"****",
   db_type     =>"pg",
   sleep_time  =>3,
   lock_file   =>$ENV{"HOME"} . "/run/ukhasnet.pid"
@@ -268,7 +268,7 @@ sub getNodeID {
 	} else {
 		$addNode->execute($origin);
 		$nodeID=$dbh->last_insert_id(undef, "ukhasnet", "nodes", undef);
-		syslog('info', "(getNodeID): Added Node $origin($nodeID)";
+		syslog('info', "(getNodeID): Added Node $origin($nodeID)");
 	}
 	#$getNode->finish();
 	#$addNode->finish();
