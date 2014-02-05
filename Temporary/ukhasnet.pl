@@ -20,7 +20,7 @@ my %Options=(
   db_host     =>"philcrump.co.uk",
   db_database =>"postgres",
   db_user     =>"mike",
-  db_pass     =>"****",
+  db_pass     =>"m1ari",
   db_type     =>"pg",
   sleep_time  =>3,
   lock_file   =>$ENV{"HOME"} . "/run/ukhasnet.pid"
@@ -55,7 +55,7 @@ while ($loop){
 		$dbh->do("SET search_path TO ukhasnet");
 
 		# Prep SQL Statements
-		my $getUploads=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from upload where state='Pending' LIMIT 20");
+		my $getUploads=$dbh->prepare("select id, nodeid, extract(epoch from time) as time, packet from upload where state='Pending' ORDER BY time DESC LIMIT 50");
 		my $findPacket=$dbh->prepare("
 			select packet.id as packetid from packet left join nodes on packet.originid=nodes.id where
 			name=? and sequence=? and checksum=? and to_timestamp(?)
@@ -77,13 +77,14 @@ while ($loop){
 		# data string
 		my $data_raw=$dbh->prepare("insert into rawdata (packetid, data, state) values (?, ?, ?)");
 		my $dataProcessed=$dbh->prepare('update rawdata set state=$2 where id=$1');
+		my $delRaw=$dbh->prepare('delete from rawdata where id=?');
 
 		# Get Pending records from the upload Table
 		$getUploads->execute();
 		while (my $record=$getUploads->fetchrow_hashref){
 			syslog('info', "Processing Packet \"".$record->{'packet'}."\"(".$record->{'id'}.")");
 			$entries++;
-			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)\[([A-Za-z,]+)\]\r?$/){
+			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)\[([A-Za-z0-9,]+)\]\r?$/){
 				$dbh->begin_work();	# Start Transaction
 				my $error=0;
 
@@ -135,7 +136,7 @@ while ($loop){
 							$addPath->execute($rxID, $hop++, $nodeID);
 						} else {
 							$error=1;
-							syslog('error', "Error: (addPath) Unable to get NodeID($PacketID:$rxID)");
+							syslog('warning', "Error: (addPath) Unable to get NodeID($PacketID:$rxID)");
 						}
 					}
 				}
@@ -178,26 +179,27 @@ while ($loop){
 								$data_float->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
 							}
 						} elsif ($type->{'type'} eq "Integer"){
-							syslog('error', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
+							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
 							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 						} elsif ($type->{'type'} eq "String"){
-							syslog('error', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
+							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
 							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 						} else {
-							syslog('error', "Error: Unknown type(".$type->{'type'}.") for ".$var.$val."($datarow->{'packetid'})");
+							syslog('warning', "Error: Unknown type(".$type->{'type'}.") for ".$var.$val."($datarow->{'packetid'})");
 							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 						}
 					} else {
-						syslog('error', "Error: Wrong number of rows for ".$var.$val."($datarow->{'packetid'})");
+						syslog('warning', "Error: Wrong number of rows for ".$var.$val."($datarow->{'packetid'})");
 						$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 					}
 				} else {
-					syslog('error', "Error: Cannot process $data($datarow->{'packetid'})");
+					syslog('warning', "Error: Cannot process $data($datarow->{'packetid'})");
 					$data_raw->execute($datarow->{'packetid'}, $data, 'Error');
 					undef($data);
 				}
 			} # while($data)
-			$dataProcessed->execute($datarow->{'id'}, 'Processed');
+			#$dataProcessed->execute($datarow->{'id'}, 'Processed');
+			$delRaw->execute($datarow->{'id'});
 			if ($error == 0){
 				$dbh->commit();
 			} else {
@@ -217,13 +219,16 @@ while ($loop){
 		$addPath->finish();
 		$uploadUpdate->finish();
 		$uploadFailed->finish();
+		$getRawData->finish();
 		$getField->finish();
 		$data_float->finish();
 		$data_raw->finish();
+		$dataProcessed->finish();
+		$delRaw->finish();
 		$dbh->disconnect();
 		sleep (20) if ($loop && ($entries==0));
 	} else { #if ($dbh)
-		syslog('error', "Error: Unable to connect to DB");
+		syslog('warning', "Error: Unable to connect to DB");
 		sleep(60) if $loop;
 	}
 } #while($loop)
