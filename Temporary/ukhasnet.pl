@@ -119,7 +119,7 @@ while ($loop){
 						$data_raw->execute($PacketID, $data, 'Pending');
 					} else {
 						$error=1;
-						print "Error: (addPacket) Unable to get NodeID\n";
+						syslog('warning', "Error: (addPacket) Unable to get NodeID");
 					}
 				}
 
@@ -261,14 +261,14 @@ sub getNodeID {
 		my $nodeRow=$getNode->fetchrow_hashref;
 		$nodeID=$nodeRow->{'id'};
 	} elsif ($getNode->rows()>1){
-		print "Error: Matched more than one node\n"; #Input line ".$record->{'packet'}."(".$record->{'id'}.") matches more than one origin node in DB\n";
-		while (my $nodeRow=$getNode->fetchrow_hashref){
-			print "-->Potential ID " . $nodeRow->{'id'} . "\n";
-		}
+		syslog('warning', "Error(getNodeID): Matched more than one node for $origin");
+		#while (my $nodeRow=$getNode->fetchrow_hashref){
+		#	syslog('warning', "Error(getNodeID): Node $origin could be id: " . $nodeRow->{'id'});
+		#}
 	} else {
 		$addNode->execute($origin);
 		$nodeID=$dbh->last_insert_id(undef, "ukhasnet", "nodes", undef);
-		print "--> Added Node $origin($nodeID)\n";
+		syslog('info', "(getNodeID): Added Node $origin($nodeID)";
 	}
 	#$getNode->finish();
 	#$addNode->finish();
@@ -281,7 +281,7 @@ sub splitData {
 	if ($data =~ /^([A-Z])([0-9\.,\-]+)(.*)$/ ){
 		return ($1, $2, $3);
 	} else {
-		print "Error: No Match for $data\n";
+		syslog('warning', "Error(splitData): No Match for $data");
 		return (-1,-1,$data);
 	}
 }
