@@ -73,25 +73,30 @@ while ($loop){
 		my $getRawData=$dbh->prepare("select id, packetid, data from rawdata where state='Pending' LIMIT 60");
 		my $getField=$dbh->prepare("select id, type from fieldtypes where dataid=?");
 		my $data_float=$dbh->prepare("insert into data_float (packetid, fieldid, data, position) values (?, ?, ?, ?)");
+		my $data_location=$dbh->prepare("insert into data_location (packetid, latitude, longitude, altitude) values (?, ?, ?, ?)");
 		# data int
 		# data string
 		my $data_raw=$dbh->prepare("insert into rawdata (packetid, data, state) values (?, ?, ?)");
 		my $dataProcessed=$dbh->prepare('update rawdata set state=$2 where id=$1');
 		my $delRaw=$dbh->prepare('delete from rawdata where id=?');
 
+		# Notify for websockets
+		my $notify=$dbh->prepare('NOTIFY upload_parse, \'{"i": ?,"s":? }\'');
+
 		# Get Pending records from the upload Table
 		$getUploads->execute();
 		while (my $record=$getUploads->fetchrow_hashref){
 			syslog('info', "Processing Packet \"".$record->{'packet'}."\"(".$record->{'id'}.")");
 			$entries++;
-			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)\[([A-Za-z0-9,]+)\]\r?$/){
+			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)(.*)\[([A-Za-z0-9,]+)\]\r?$/){
 				$dbh->begin_work();	# Start Transaction
 				my $error=0;
 
 				#my $repeat=$1;
 				my $seq=$2;
 				my $data=$3;
-				my $path=$4;
+				my $text=$4;
+				my $path=$5;
 
 				my ($origin,$therest) = split(',', $path);
 				my $csum=crcccitt($seq . $data . $origin);
@@ -104,9 +109,9 @@ while ($loop){
 					$PacketID=$row->{'packetid'};
 				} elsif ($findPacket->rows()>1){			# Multiple Matches - Bad
 					$error=1;
-					print "Error: Input line ".$record->{'packet'}."(".$record->{'id'}.") matches more than one packet in DB\n";
+					syslog('warning', "Error: Input line ".$record->{'packet'}."(".$record->{'id'}.") matches more than one packet in DB");
 					while (my $row=$findPacket->fetchrow_hashref){
-						print "-->Potential ID " . $row->{'packetid'} . "\n";
+						syslog('warning', "Info: Upload ".$record->{'id'}." Potentially matches packet:" . $row->{'packetid'});
 					}
 				} else {
 					# Get NodeID for Origin
@@ -117,6 +122,7 @@ while ($loop){
 						$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
 						# Store the Data portion of the packet in rawdata for later processing
 						$data_raw->execute($PacketID, $data, 'Pending');
+						$data_raw->execute($PacketID, $text, 'Error');
 					} else {
 						$error=1;
 						syslog('warning', "Error: (addPacket) Unable to get NodeID");
@@ -142,11 +148,15 @@ while ($loop){
 				}
 				if ($error == 0){
 					$dbh->commit();
+					#$notify->execute($record->{'id'},"Processed");
+					$dbh->do("NOTIFY upload_parse, '{\"i\": ".$record->{'id'}.",\"s\": \"Processed\"}'");
+					# NOTIFY upload_parse, '{"i":<uploadid>,"s":"Processed"}';
 				} else {
 					# Rollback
 					$dbh->rollback();
 					$uploadFailed->execute($record->{'id'});
-					die "DB Transaction failed\n";
+					syslog("warning", "Error: DB Transaction failed for upload: ".$record->{'id'});
+					#die "DB Transaction failed\n";
 				}
 			} else {
 				# Unknown packet format
@@ -182,6 +192,23 @@ while ($loop){
 							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
 							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 						} elsif ($type->{'type'} eq "String"){
+							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
+							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+						} elsif ($type->{'type'} eq "Location"){
+							if ($var eq 'L'){	# We only know how to deal with Locations of type L anything else is an error
+								if      ($val =~ /^([+-]?[0-9]+\.?[0-9]*),([+-]?[0-9]+\.?[0-9]*)$/){	# Lat,Lon
+									$data_location->execute($datarow->{'packetid'}, $1, $2, undef); 
+								} elsif ($val =~ /^([+-]?[0-9]+\.?[0-9]*),([+-]?[0-9]+\.?[0-9]+),([+-]?[0-9]+\.?[0-9]*)$/){	# Lat,Lon, Alt
+									$data_location->execute($datarow->{'packetid'}, $1, $2, $3); 
+								} else {
+									syslog('warning', "Error: Can't parse Location (".$var.$val.":".$datarow->{'packetid'}.")");
+									$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+								}
+							} else {	# if eq L
+								syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
+								$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+							}
+						} elsif ($type->{'type'} eq "NULL"){
 							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
 							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 						} else {
@@ -222,6 +249,7 @@ while ($loop){
 		$getRawData->finish();
 		$getField->finish();
 		$data_float->finish();
+		$data_location->finish();
 		$data_raw->finish();
 		$dataProcessed->finish();
 		$delRaw->finish();
