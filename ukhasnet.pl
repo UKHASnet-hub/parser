@@ -5,32 +5,37 @@ use Digest::CRC qw(crcccitt);
 use DBI();
 use POSIX qw(setsid);
 use Sys::Syslog;
+use JSON::XS qw( decode_json);
 
 # TODO List
 # Check SQL inserts/updates work otherwise log an error message and set $error=1 - or $error=1 on ->execute() ??
 # Move packet data Processing into sub?
-# Get password from command line
 # Test Transactions work (i.e. if a query fails we roll it all back) - How to test?
 # How to deal with sequence = a
 #   Should also not link to previous packets (requires us to remember state)
 
 # Load/cache fieldtypes into hashref
 
-my %Options=(
-  db_host     =>"philcrump.co.uk",
-  db_database =>"postgres",
-  db_user     =>"mike",
-  db_pass     =>"****",
-  db_type     =>"pg",
-  sleep_time  =>3,
-  lock_file   =>$ENV{"HOME"} . "/run/ukhasnet.pid"
-);
+# Load Configuration from config.json
+my $config;
+if ( -f 'config.json' ){
+	open(_CONF, "<", "config.json");
+	my $config_raw=do { local $/=undef; <_CONF>};
+	close(_CONF);
+	$config=decode_json($config_raw);
+} else {
+	die "config.json is not present - you need to create it\n";
+}
 
-if ( -f $Options{'lock_file'}){
+# TODO Test that config.json has the required values for us to run
+# TODO We should probably check it's safe to eval the value here...
+my $lock_file=eval($config->{'lock_file'});
+
+if ( -f $lock_file){
 	print "A process is already running\n";
 	exit -1;
 }
-open (_LOCK, ">".$Options{'lock_file'}) or die "Unable to create lockfile\n";
+open (_LOCK, ">", $lock_file) or die "Unable to create lockfile\n";
 &daemonize;
 print _LOCK "$$";
 close _LOCK;
@@ -41,7 +46,7 @@ my $entries=0;
 my $dbh=0;
 
 # Syslog
-openlog('ukhasnet', 'cons,pid', 'local1');
+openlog('ukhasnet', 'cons,pid', $config->{'syslog'}{'facility'});
 
 $SIG{HUP}= \&catch_hup;
 $SIG{INT}= \&catch_hup;
@@ -49,7 +54,7 @@ $SIG{INT}= \&catch_hup;
 syslog('info', 'Starting');
 while ($loop){
 	$entries=0;     # Reset Counter
-	$dbh = DBI->connect("DBI:Pg:host=$Options{'db_host'};database=$Options{'db_database'}", $Options{'db_user'},$Options{'db_pass'});
+	$dbh = DBI->connect("DBI:Pg:host=$config->{'database'}{'host'};database=$config->{'database'}{'database'}", $config->{'database'}{'user'},$config->{'database'}{'password'});
 	# Check we're connected to the DB
 		if ($dbh){
 		$dbh->do("SET search_path TO ukhasnet");
@@ -261,7 +266,7 @@ while ($loop){
 	}
 } #while($loop)
 
-unlink $Options{'lock_file'};
+unlink $lock_file;
 syslog('info', 'Finished');
 
 sub daemonize {

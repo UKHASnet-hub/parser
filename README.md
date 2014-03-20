@@ -1,10 +1,15 @@
-Backed scripts and code for the UKHASnet project
+Applications and scripts for the UKHasnet Backend system
+========================================================
 
-See also:
-Node Code: https://github.com/jamescoxon/UKHASnet
-Frontend Web Code: https://github.com/philcrump/UKHASnet-www
 
-Initial scripts are in the Temporary folder
+ukhasnet.pl
+-----------
+script that parses uploaded telemetry lines into the other tables within
+the database. The configuration for this script should be provided in
+config.json which should be based on config-template.json
 
-MySQL DB Schema can be found in dropbox ...
+This script is designed to only run a single instance per backed database.
+Running multiple copies could lead to bad things.
+
+Required packages
 

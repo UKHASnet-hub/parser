@@ -1,8 +1,14 @@
 {
 	"database": {
-		"host": "<DBHOST>",
-		"database": "<DATABASE>"
-		"user": "<DBUSER>"
-		"password": "<DBPASSWORD>"
+		"host": "localhost",
+		"database": "ukhasnet",
+		"user": "ukhasnet",
+		"password": "secret"
+	},
+
+	"lock_file": "$ENV{'HOME'} . '/run/ukhasnet.pid'",
+
+	"syslog": {
+		"facility": "local1"
 	}
 }
