@@ -76,9 +76,11 @@ while ($loop){
 
 		# Queries for handling data portion of the packet
 		my $getRawData=$dbh->prepare("select id, packetid, data from rawdata where state='Pending' LIMIT 60");
-		my $getField=$dbh->prepare("select id, type from fieldtypes where dataid=?");
+		my $getField=$dbh->prepare("select id, type from fieldtypes where dataid=?");	# TODO Can we cache this ???
+		my $getNodeFromPacket=$dbh->prepare("select originid from ukhasnet.packet where id=?");
 		my $data_float=$dbh->prepare("insert into data_float (packetid, fieldid, data, position) values (?, ?, ?, ?)");
 		my $data_location=$dbh->prepare("insert into data_location (packetid, latitude, longitude, altitude) values (?, ?, ?, ?)");
+		my $updateNodeLocation=$dbh->prepare('update nodes set locationid=$2 where id=$1');
 		# data int
 		# data string
 		my $data_raw=$dbh->prepare("insert into rawdata (packetid, data, state) values (?, ?, ?)");
@@ -201,13 +203,26 @@ while ($loop){
 							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 						} elsif ($type->{'type'} eq "Location"){
 							if ($var eq 'L'){	# We only know how to deal with Locations of type L anything else is an error
+								my $locID=0;
 								if      ($val =~ /^([+-]?[0-9]+\.?[0-9]*),([+-]?[0-9]+\.?[0-9]*)$/){	# Lat,Lon
 									$data_location->execute($datarow->{'packetid'}, $1, $2, undef); 
+									$locID=$dbh->last_insert_id(undef, "ukhasnet", "data_location", undef);
 								} elsif ($val =~ /^([+-]?[0-9]+\.?[0-9]*),([+-]?[0-9]+\.?[0-9]+),([+-]?[0-9]+\.?[0-9]*)$/){	# Lat,Lon, Alt
 									$data_location->execute($datarow->{'packetid'}, $1, $2, $3); 
+									$locID=$dbh->last_insert_id(undef, "ukhasnet", "data_location", undef);
 								} else {
 									syslog('warning', "Error: Can't parse Location (".$var.$val.":".$datarow->{'packetid'}.")");
 									$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+								}
+								if ($locID>0){
+									$getNodeFromPacket->execute($datarow->{'packetid'});
+									if ($getNodeFromPacket->rows()==1){
+										my $nodeRow=$getNodeFromPacket->fetchrow_hashref;
+										$updateNodeLocation->execute($nodeRow->{'originid'},$locID);
+										#print "Packet:" . $datarow->{'packetid'} .", LocationID: $locID, Node:".$nodeRow->{'originid'}."\n"; 
+									} else {
+										syslog('warning', "Error: Can't get node for packet: ".$datarow->{'packetid'});
+									}
 								}
 							} else {	# if eq L
 								syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
@@ -253,8 +268,10 @@ while ($loop){
 		$uploadFailed->finish();
 		$getRawData->finish();
 		$getField->finish();
+		$getNodeFromPacket->finish();
 		$data_float->finish();
 		$data_location->finish();
+		$updateNodeLocation->finish();
 		$data_raw->finish();
 		$dataProcessed->finish();
 		$delRaw->finish();
