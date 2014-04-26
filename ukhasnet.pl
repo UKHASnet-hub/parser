@@ -281,7 +281,7 @@ while ($loop){
 		$dataProcessed->finish();
 		$delRaw->finish();
 		$dbh->disconnect();
-		sleep (20) if ($loop && ($entries==0));
+		sleep (5) if ($loop && ($entries==0));
 	} else { #if ($dbh)
 		syslog('warning', "Error: Unable to connect to DB");
 		sleep(60) if $loop;
