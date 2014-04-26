@@ -204,12 +204,17 @@ while ($loop){
 						} elsif ($type->{'type'} eq "Location"){
 							if ($var eq 'L'){	# We only know how to deal with Locations of type L anything else is an error
 								my $locID=0;
-								if      ($val =~ /^([+-]?[0-9]+\.?[0-9]*),([+-]?[0-9]+\.?[0-9]*)$/){	# Lat,Lon
+								if      ($val =~ /^([+-]?[0-9]+\.[0-9]+),([+-]?[0-9]+\.[0-9]+)$/){	# Lat,Lon
 									$data_location->execute($datarow->{'packetid'}, $1, $2, undef); 
 									$locID=$dbh->last_insert_id(undef, "ukhasnet", "data_location", undef);
-								} elsif ($val =~ /^([+-]?[0-9]+\.?[0-9]*),([+-]?[0-9]+\.?[0-9]+),([+-]?[0-9]+\.?[0-9]*)$/){	# Lat,Lon, Alt
+								} elsif ($val =~ /^([+-]?[0-9]+\.[0-9]+),([+-]?[0-9]+\.[0-9]+),([+-]?[0-9]+\.?[0-9]*)$/){	# Lat,Lon, Alt
 									$data_location->execute($datarow->{'packetid'}, $1, $2, $3); 
 									$locID=$dbh->last_insert_id(undef, "ukhasnet", "data_location", undef);
+								} elsif ($val =~ /^([+-]?[0-9]{5,}),([+-]?[0-9]{5,})$/){    			# integer Lat,Lon (Hacky for balloons)
+									$data_location->execute($datarow->{'packetid'}, ($1/10000), ($2/10000), undef); 
+									$locID=$dbh->last_insert_id(undef, "ukhasnet", "data_location", undef);
+								} elsif ($val =~ /^([+-]?[0-9]{5,}),([+-]?[0-9]{5,}),([+-]?[0-9]+)$/){	# Integer Lat,Lon, Alt (Hacky for balloons)
+									$data_location->execute($datarow->{'packetid'}, ($1/10000), ($2/10000), $3); 
 								} else {
 									syslog('warning', "Error: Can't parse Location (".$var.$val.":".$datarow->{'packetid'}.")");
 									$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
