@@ -215,6 +215,7 @@ while ($loop){
 									$locID=$dbh->last_insert_id(undef, "ukhasnet", "data_location", undef);
 								} elsif ($val =~ /^([+-]?[0-9]{5,}),([+-]?[0-9]{5,}),([+-]?[0-9]+)$/){	# Integer Lat,Lon, Alt (Hacky for balloons)
 									$data_location->execute($datarow->{'packetid'}, ($1/10000), ($2/10000), $3); 
+									$locID=$dbh->last_insert_id(undef, "ukhasnet", "data_location", undef);
 								} else {
 									syslog('warning', "Error: Can't parse Location (".$var.$val.":".$datarow->{'packetid'}.")");
 									$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
