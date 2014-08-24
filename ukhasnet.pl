@@ -69,6 +69,7 @@ while ($loop){
 			and
 				(select max(packet_rx_time) from packet_rx where packetid=packet.id) + interval '1' minute");
 		my $addPacket=$dbh->prepare("insert into packet (originid, sequence, checksum) values (?, ?, ?)");
+		my $nodeLastPacket=$dbh->prepare("update nodes set lastpacket=? where id=?");
 		my $addPacketRX=$dbh->prepare("insert into packet_rx (packetid, gatewayid, packet_rx_time, uploadid) values (?, ?, to_timestamp(?), ?)");
 		my $addPath=$dbh->prepare("insert into path (packet_rx_id, position, nodeid) values (?, ?, ?)");
 		my $uploadUpdate=$dbh->prepare("update upload set packetid=?, state='Processed' where id=?");
@@ -130,6 +131,9 @@ while ($loop){
 						# Store the Data portion of the packet in rawdata for later processing
 						$data_raw->execute($PacketID, $data, 'Pending');
 						$data_raw->execute($PacketID, $text, 'Error');
+
+						# Update the nodes table to set the last packet value
+						$nodeLastPacket->execute($PacketID, $nodeID);
 					} else {
 						$error=1;
 						syslog('warning', "Error: (addPacket) Unable to get NodeID");
@@ -268,6 +272,7 @@ while ($loop){
 		$getUploads->finish();
 		$findPacket->finish();
 		$addPacket->finish();
+		$nodeLastPacket->finish();
 		$addPacketRX->finish();
 		$addPath->finish();
 		$uploadUpdate->finish();
