@@ -202,8 +202,8 @@ while ($loop){
 								if ($v =~ /^[-]?\d+(?:[.]\d+)?$/){
 									$data_float->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
 								} else {
-									syslog('error', "Error processing type ".$type->{'id'}." with value $v (".$datarow->{'packetid'}.")");
-									$error=1;
+									syslog('warning', "Error processing type ".$type->{'id'}." with value $v (".$datarow->{'packetid'}.")");
+									$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 								}
 							}
 						} elsif ($type->{'type'} eq "Integer"){
