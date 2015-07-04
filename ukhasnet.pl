@@ -197,7 +197,9 @@ while ($loop){
 						if ($type->{'type'} eq "Float"){ 
 							my $p=0;
 							foreach my $v (split(/,/, $val)){
-								if ($v =~ /^-?[0-9]+\.?[0-9]*$/){
+								# "T-00.-H59(13407566)
+								#if ($v =~ /^[+-]?[0-9]+\.?[0-9]*$/){
+								if ($v =~ /^[-]?\d+(?:[.]\d+)?$/){
 									$data_float->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
 								} else {
 									syslog('error', "Error processing type ".$type->{'id'}." with value $v (".$datarow->{'packetid'}.")");
