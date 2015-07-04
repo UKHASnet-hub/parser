@@ -96,7 +96,7 @@ while ($loop){
 		while (my $record=$getUploads->fetchrow_hashref){
 			syslog('info', "Processing Packet \"".$record->{'packet'}."\"(".$record->{'id'}.")");
 			$entries++;
-			if ($record->{'packet'} =~ /^([0-9])([a-z])([A-Z0-9\.,\-]+)(.*)\[([A-Za-z0-9,]+)\]\r?$/){
+			if ($record->{'packet'} =~ /^\r?([0-9])([a-z])([A-Z0-9\.,\-]+)(.*)\[([A-Za-z0-9,]+)\]\r?$/){
 				$dbh->begin_work();	# Start Transaction
 				my $error=0;
 
