@@ -80,6 +80,7 @@ while ($loop){
 		my $getField=$dbh->prepare("select id, type from fieldtypes where dataid=?");	# TODO Can we cache this ???
 		my $getNodeFromPacket=$dbh->prepare("select originid from ukhasnet.packet where id=?");
 		my $data_float=$dbh->prepare("insert into data_float (packetid, fieldid, data, position) values (?, ?, ?, ?)");
+		my $data_int=$dbh->prepare("insert into data_int (packetid, fieldid, data, position) values (?, ?, ?, ?)");
 		my $data_location=$dbh->prepare("insert into data_location (packetid, latitude, longitude, altitude) values (?, ?, ?, ?)");
 		my $updateNodeLocation=$dbh->prepare('update nodes set locationid=$2 where id=$1');
 		# data int
@@ -197,8 +198,6 @@ while ($loop){
 						if ($type->{'type'} eq "Float"){ 
 							my $p=0;
 							foreach my $v (split(/,/, $val)){
-								# "T-00.-H59(13407566)
-								#if ($v =~ /^[+-]?[0-9]+\.?[0-9]*$/){
 								if ($v =~ /^[-]?\d+(?:[.]\d+)?$/){
 									$data_float->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
 								} else {
@@ -207,8 +206,17 @@ while ($loop){
 								}
 							}
 						} elsif ($type->{'type'} eq "Integer"){
-							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
-							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+							my $p=0;
+							foreach my $v (split(/,/, $val)){
+								if ($v =~ /^[-]?\d+$/){
+									$data_int->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
+								} else {
+									syslog('warning', "Error processing type ".$type->{'id'}." with value $v (".$datarow->{'packetid'}.")");
+									$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
+								}
+							}
+							#syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
+							#$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
 						} elsif ($type->{'type'} eq "String"){
 							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
 							$data_raw->execute($datarow->{'packetid'}, $var.$val, 'Error');
