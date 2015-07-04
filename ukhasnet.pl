@@ -197,7 +197,12 @@ while ($loop){
 						if ($type->{'type'} eq "Float"){ 
 							my $p=0;
 							foreach my $v (split(/,/, $val)){
-								$data_float->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
+								if ($v ~= /[0-9]+\.?[0-9]*/){
+									$data_float->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
+								} else {
+									syslog('error', "Error processing type ".$type->{'id'}." with value $v (".$datarow->{'packetid'}.")");
+									$error=1;
+								}
 							}
 						} elsif ($type->{'type'} eq "Integer"){
 							syslog('warning', "Error: Cant store ".$type->{'type'}." for ".$var.$val."($datarow->{'packetid'})");
