@@ -97,15 +97,13 @@ while ($loop){
 		while (my $record=$getUploads->fetchrow_hashref){
 			syslog('info', "Processing Packet \"".$record->{'packet'}."\"(".$record->{'id'}.")");
 			$entries++;
-			#if ($record->{'packet'} =~ /^\r?([0-9])([a-z])([A-Z0-9\.,\-]+)(.*)\[([A-Za-z0-9,]+)\]\r?$/){	#Old Detection regex (text seperate todata)
-			if ($record->{'packet'} =~ /^\r?([0-9])([a-z])([A-Z:]^[\[\]|]+)\[([A-Za-z0-9,]+)\]\r?$/){
+			if ($record->{'packet'} =~ /^\r?([0-9])([a-z])([A-Z:][^\[\]|]+)\[([A-Za-z0-9,]+)\]\r?$/){
 				$dbh->begin_work();	# Start Transaction
 				my $error=0;
 
 				#my $repeat=$1;
 				my $seq=$2;
 				my $data=$3;
-				#my $text=$4;
 				my $path=$4;
 
 				my ($origin,$therest) = split(',', $path);
@@ -132,12 +130,14 @@ while ($loop){
 						$PacketID=$dbh->last_insert_id(undef, "ukhasnet", "packet", undef);
 						# Store the Data portion of the packet in rawdata for later processing
 						$data_raw->execute($PacketID, $data, 'Pending');
-						#$data_raw->execute($PacketID, $text, 'Error');
 
 						# Update the nodes table to set the last packet value
 						$nodeLastPacket->execute($PacketID, $nodeID);
 
-						# TODO Notify the IRC bot if the data portion contains a :
+						# Notify the IRC bot if the data portion contains a :
+						if ($data =~/:/){
+							$dbh->do("NOTIFY ircbot, 'msg_rx:".$PacketID."'");
+						}
 					} else {
 						$error=1;
 						syslog('warning', "Error: (addPacket) Unable to get NodeID");
@@ -176,7 +176,7 @@ while ($loop){
 			} else {
 				# Unknown packet format
 				print "?> ".$record->{'packet'}."(".$record->{'id'}.")\n";
-				#$uploadFailed->execute($record->{'id'});	# Removed for testing
+				$uploadFailed->execute($record->{'id'});	# Removed for testing
 			}
 		} #while (my $record=$getUploads->fetchrow_hashref){
 
