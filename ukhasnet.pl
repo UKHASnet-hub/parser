@@ -355,9 +355,10 @@ sub getNodeID {
 }
 
 sub splitData {
-	die "Wrong number of args to getNodeID\n" if (scalar(@_) !=1 );
+	die "Wrong number of args to splitData\n" if (scalar(@_) !=1 );
 	my $data=$_[0];
-	if ($data =~ /^([A-Z])([0-9\.,\-]+)(.*)$/ ){
+	#if ($data =~ /^([A-Z])([0-9\.,\-]+)(.*)$/ ){
+	if ($data =~ /^([A-Z])([0-9\.,\-]+)([A-Z:].*)?$/ ){
 		return ($1, $2, $3);
 	} else {
 		syslog('warning', "Error(splitData): No Match for $data");
