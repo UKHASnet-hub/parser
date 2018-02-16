@@ -211,7 +211,7 @@ while ($loop){
 						} elsif ($type->{'type'} eq "Integer"){
 							my $p=0;
 							foreach my $v (split(/,/, $val)){
-								if ($v =~ /^[-]?\d+$/){
+								if ($v =~ /^[-]?\d{1,9}$/){
 									$data_int->execute($datarow->{'packetid'}, $type->{'id'}, $v, $p++);
 								} else {
 									syslog('warning', "Error processing type ".$type->{'id'}." with value $v (".$datarow->{'packetid'}.")");
